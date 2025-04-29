@@ -1,0 +1,10 @@
+<resources>
+    <string name="default_web_client_id">384366307216-o1b885q0ogm8s1f7bvvl647s8h7g612g.apps.googleusercontent.com</string>
+    <string name="google_app_id">1:384366307216:android:05ecf57a7288b1f8693515</string>
+    <string name="firebase_database_url">https://melodymind-fyp-default-rtdb.firebaseio.com</string>
+    <string name="ga_trackingId">your-tracking-id</string>
+    <string name="gcm_defaultSenderId">384366307216</string>
+    <string name="google_api_key">AIzaSyDP7Z_v5bagVCwNccIYYiP4uFAzfqbIdVY</string>
+    <string name="google_crash_reporting_api_key">your-crash-reporting-key</string>
+    <string name="project_id">melodymind-fyp</string>
+</resources>

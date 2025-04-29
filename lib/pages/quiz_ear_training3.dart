@@ -1,0 +1,827 @@
+import 'dart:convert';
+import 'dart:math';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/services.dart';
+
+class QuizEarTraining3 extends StatefulWidget {
+  const QuizEarTraining3({Key? key}) : super(key: key);
+
+  @override
+  _QuizEarTraining3State createState() => _QuizEarTraining3State();
+}
+
+class _QuizEarTraining3State extends State<QuizEarTraining3> {
+  int _score = 0;
+  int _currentQuestionIndex = 0;
+  bool _quizCompleted = false;
+  List<int> _userAnswers = List.filled(10, -1);
+  List<EarQuestion> _questions = [];
+  final Random _random = Random();
+
+  // Track if current question is answered
+  bool _currentQuestionAnswered = false;
+  // Store the user's selected answer index
+  int _selectedAnswerIndex = -1;
+  
+  // Audio players
+  final AudioPlayer _questionAudioPlayer = AudioPlayer();
+  final AudioPlayer _correctSoundPlayer = AudioPlayer();
+  final AudioPlayer _incorrectSoundPlayer = AudioPlayer();
+
+  // List of black keys to use in our quiz
+  final List<String> blackKeys = ['C#', 'D#', 'F#', 'G#', 'A#'];
+  // Alternative notation for showing as options
+  final Map<String, String> alternativeNotation = {
+    'C#': 'Db',
+    'D#': 'Eb',
+    'F#': 'Gb',
+    'G#': 'Ab',
+    'A#': 'Bb'
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _generateQuestions();
+  }
+
+  // Play correct answer sound
+  void _playCorrectSound() async {
+    await _correctSoundPlayer.play(AssetSource('sounds/correct.mp3'));
+  }
+  
+  // Play incorrect answer sound
+  void _playIncorrectSound() async {
+    await _incorrectSoundPlayer.play(AssetSource('sounds/incorrect.mp3'));
+  }
+
+  // Play the note sound
+void _playNoteSound(String note) async {
+  try {
+    // Handle both formats: C# and Db might be stored differently
+    String soundFileName = note;
+    // Standardize flat notes to sharp notation for file lookup if needed
+    if (note.contains('b')) {
+      // Map of flat to sharp equivalents
+      final Map<String, String> flatToSharp = {
+        'Db': 'C#', 'Eb': 'D#', 'Gb': 'F#', 
+        'Ab': 'G#', 'Bb': 'A#'
+      };
+      soundFileName = flatToSharp[note] ?? note;
+    }
+    
+    // 替换 # 为 s 以匹配文件命名格式
+    soundFileName = soundFileName.replaceAll('#', 's');
+    
+    // 更新后的代码支持Web平台
+    if (kIsWeb) {
+      String url = await getUrlFromAsset('sounds/$soundFileName.mp3');
+      await _questionAudioPlayer.play(UrlSource(url));
+    } else {
+      await _questionAudioPlayer.play(AssetSource('sounds/$soundFileName.mp3'));
+    }
+  } catch (e) {
+    print('Error playing note sound: $e');
+  }
+}
+
+// 作为类的方法，与_playNoteSound平级
+Future<String> getUrlFromAsset(String assetPath) async {
+  final ByteData data = await rootBundle.load(assetPath);
+  final List<int> bytes = data.buffer.asUint8List().toList();
+  final base64String = base64Encode(bytes);
+  final String url = 'data:audio/mp3;base64,$base64String';
+  return url;
+}
+
+  @override
+  void dispose() {
+    _questionAudioPlayer.dispose();
+    _correctSoundPlayer.dispose();
+    _incorrectSoundPlayer.dispose();
+    super.dispose();
+  }
+
+  void _generateQuestions() {
+    final List<EarQuestion> questions = [];
+    
+    for (int i = 0; i < 10; i++) {
+      // Select a correct answer from black keys
+      final int correctNoteIndex = _random.nextInt(blackKeys.length);
+      final String correctNote = blackKeys[correctNoteIndex];
+      
+      // Determine if we'll show sharp or flat notation for the correct answer
+      // This adds variety to how the answer choices are displayed
+      final bool useSharpNotation = _random.nextBool();
+      final String displayCorrectNote = useSharpNotation ? 
+        correctNote : alternativeNotation[correctNote] ?? correctNote;
+      
+      // Create wrong options by selecting different black keys
+      // For wrong answers, we'll mix both sharp and flat notations
+      final List<String> candidateOptions = [];
+      for (int j = 0; j < blackKeys.length; j++) {
+        if (j != correctNoteIndex) {
+          // Random decide to use sharp or flat notation for each wrong option
+          final bool useSharp = _random.nextBool();
+          candidateOptions.add(useSharp ? 
+            blackKeys[j] : alternativeNotation[blackKeys[j]] ?? blackKeys[j]);
+        }
+      }
+      
+      // Shuffle candidate options and take first 3
+      candidateOptions.shuffle(_random);
+      final List<String> wrongOptions = candidateOptions.take(3).toList();
+      
+      // Combine correct answer with wrong options
+      final List<String> options = [displayCorrectNote, ...wrongOptions];
+      
+      // Shuffle options to randomize the position of the correct answer
+      options.shuffle(_random);
+      
+      // Find the index of the correct answer in the shuffled options
+      final int correctOptionIndex = options.indexOf(displayCorrectNote);
+      
+      // Create the question
+      questions.add(
+        EarQuestion(
+          correctNote: correctNote, // Always use sharp notation for internal reference
+          displayCorrectNote: displayCorrectNote, // What's shown to the user
+          options: options,
+          correctOptionIndex: correctOptionIndex,
+        )
+      );
+    }
+
+    setState(() {
+      _questions = questions;
+    });
+  }
+
+  // Handle answer selection
+  void _answerQuestion(int selectedOptionIndex) {
+    if (_currentQuestionIndex < _questions.length && !_currentQuestionAnswered) {
+      setState(() {
+        _userAnswers[_currentQuestionIndex] = selectedOptionIndex;
+        _selectedAnswerIndex = selectedOptionIndex;
+        _currentQuestionAnswered = true;
+        
+        // Check answer and play appropriate sound
+        if (selectedOptionIndex == _questions[_currentQuestionIndex].correctOptionIndex) {
+          _score++;
+          _playCorrectSound();
+          
+          // If correct, add a short delay before moving to the next question
+          Future.delayed(const Duration(milliseconds: 800), () {
+            if (_currentQuestionIndex < _questions.length - 1) {
+              _moveToNextQuestion();
+            } else {
+              _completeQuiz();
+            }
+          });
+        } else {
+          _playIncorrectSound();
+          // If wrong, user needs to click "Next Question" button
+        }
+      });
+    }
+  }
+  
+  // Move to next question
+  void _moveToNextQuestion() {
+    if (_currentQuestionIndex < _questions.length - 1) {
+      setState(() {
+        _currentQuestionIndex++;
+        _currentQuestionAnswered = false;
+        _selectedAnswerIndex = -1;
+      });
+    } else {
+      _completeQuiz();
+    }
+  }
+  
+  // Complete the quiz
+  void _completeQuiz() {
+    setState(() {
+      _quizCompleted = true;
+      _saveQuizResults();
+    });
+  }
+
+  void _saveQuizResults() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final percentage = (_score / 10 * 100).toInt();
+        final dateStr = _getCurrentDate();
+        
+        await FirebaseDatabase.instance
+            .ref()
+            .child('quiz_results')
+            .child(user.uid)
+            .push()
+            .set({
+              'quiz_type': 'Advanced',
+              'score': _score,
+              'total_questions': 10,
+              'percentage': percentage,
+              'date': dateStr,
+              'timestamp': ServerValue.timestamp,
+            });
+      }
+    } catch (e) {
+      print('Error saving quiz results: $e');
+    }
+  }
+
+  // Helper method to get current date in a readable format
+  String _getCurrentDate() {
+    final now = DateTime.now();
+    return '${now.day}/${now.month}/${now.year.toString().substring(2)}';
+  }
+
+  void _restartQuiz() {
+    setState(() {
+      _score = 0;
+      _currentQuestionIndex = 0;
+      _quizCompleted = false;
+      _userAnswers = List.filled(10, -1);
+      _currentQuestionAnswered = false;
+      _selectedAnswerIndex = -1;
+      _generateQuestions();
+    });
+  }
+
+  // Show exit confirmation dialog
+  Future<bool> _showExitConfirmationDialog() async {
+    // If quiz is completed, return directly without prompt
+    if (_quizCompleted) {
+      return true;
+    }
+    
+    // Show confirmation dialog
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Exit Quiz?',
+          style: TextStyle(
+            color: Color(0xFF753027),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: const Text(
+          'Are you sure you want to exit? Your progress will not be saved.',
+          style: TextStyle(
+            color: Color(0xFF753027),
+          ),
+        ),
+        backgroundColor: const Color(0xFFFFF0F5),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'No',
+              style: TextStyle(
+                color: Color(0xFF753027),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF753027),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+    
+    return result ?? false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return WillPopScope(
+      onWillPop: _showExitConfirmationDialog,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFFFF0F5),
+        appBar: AppBar(
+          toolbarHeight: 80,
+          title: const Text(
+            'Advanced Quiz',
+            style: TextStyle(
+              color: Color(0xFF753027),
+              fontWeight: FontWeight.bold,
+              fontSize: 20, 
+            ), 
+            maxLines: 2, 
+            overflow: TextOverflow.visible, 
+            textAlign: TextAlign.center, 
+          ),
+          centerTitle: true,
+          backgroundColor: Color(0xFFFFE4E1),
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Color(0xFF753027)),
+            onPressed: () async {
+              if (await _showExitConfirmationDialog()) {
+                Navigator.pop(context);
+              }
+            },
+          ),
+          actions: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              margin: const EdgeInsets.only(right: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFAD0C4),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                'Score: $_score/10',
+                style: const TextStyle(
+                  color: Color(0xFF753027),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+          ],
+        ),
+        body: _quizCompleted ? _buildResultScreen() : _buildQuizScreen(),
+      ),
+    );
+  }
+
+  Widget _buildQuizScreen() {
+    if (_questions.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final EarQuestion currentQuestion = _questions[_currentQuestionIndex];
+    
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.withOpacity(0.2),
+                  spreadRadius: 1,
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFF9A9E),
+                    borderRadius: BorderRadius.all(Radius.circular(12)),
+                  ),
+                  child: Center(
+                    child: Text(
+                      'Question ${_currentQuestionIndex + 1} of 10',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Identify the black key note you hear:',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: Color(0xFF753027),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: () => _playNoteSound(currentQuestion.correctNote),
+                  icon: const Icon(Icons.volume_up),
+                  label: const Text('Play Note'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF753027),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                // Show hint about black keys
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF8DC),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFFFD700), width: 1),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.lightbulb_outline, color: Color(0xFFFFD700)),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Hint: Focus on identifying if it\'s a sharp (♯) or flat (♭) note',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Color(0xFF753027),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          ..._buildOptions(currentQuestion),
+          
+          // Display correct answer and next button section
+          if (_currentQuestionAnswered && 
+              _selectedAnswerIndex != currentQuestion.correctOptionIndex)
+            Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 16),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF0F5),
+                    border: Border.all(color: const Color(0xFFFF9A9E), width: 2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Correct Answer:',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF753027),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        currentQuestion.options[currentQuestion.correctOptionIndex],
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Color(0xFF753027),
+                        ),
+                      ),
+                      // Show both notations if applicable
+                      if (currentQuestion.displayCorrectNote != currentQuestion.correctNote &&
+                          alternativeNotation[currentQuestion.correctNote] != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '(Also known as ${currentQuestion.correctNote})',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontStyle: FontStyle.italic,
+                              color: Color(0xFF753027),
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 8),
+                      Center(
+                        child: ElevatedButton.icon(
+                          onPressed: () => _playNoteSound(currentQuestion.correctNote),
+                          icon: const Icon(Icons.volume_up, size: 16),
+                          label: const Text('Play Correct Note'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF753027),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Next question button
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 16),
+                  child: ElevatedButton.icon(
+                    onPressed: _moveToNextQuestion,
+                    icon: const Icon(Icons.arrow_forward),
+                    label: Text(
+                      _currentQuestionIndex < _questions.length - 1 
+                          ? 'Next Question' 
+                          : 'Finish Quiz'
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF753027),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildOptions(EarQuestion question) {
+    final List<Widget> optionWidgets = [];
+    
+    for (int i = 0; i < question.options.length; i++) {
+      final String option = question.options[i];
+      final String label = String.fromCharCode(65 + i); // A, B, C, D
+      
+      // Determine button color
+      Color backgroundColor;
+      Color foregroundColor;
+      
+      if (_currentQuestionAnswered) {
+        if (i == question.correctOptionIndex) {
+          // Correct answer
+          backgroundColor = const Color(0xFFD4EDDA);
+          foregroundColor = const Color(0xFF155724);
+        } else if (i == _selectedAnswerIndex) {
+          // User's incorrect answer
+          backgroundColor = const Color(0xFFF8D7DA);
+          foregroundColor = const Color(0xFF721C24);
+        } else {
+          // Other options
+          backgroundColor = const Color(0xFFFAD0C4);
+          foregroundColor = const Color(0xFF753027);
+        }
+      } else {
+        // Question not answered yet
+        backgroundColor = const Color(0xFFFAD0C4);
+        foregroundColor = const Color(0xFF753027);
+      }
+      
+      // Create a different visual style for black key buttons
+      optionWidgets.add(
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: ElevatedButton(
+            onPressed: _currentQuestionAnswered ? null : () => _answerQuestion(i),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: backgroundColor,
+              foregroundColor: foregroundColor,
+              elevation: 2,
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              // Keep same colors when disabled
+              disabledBackgroundColor: backgroundColor,
+              disabledForegroundColor: foregroundColor,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Row(
+                children: [
+                  Text(
+                    '$label. ',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        option,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    
+    return optionWidgets;
+  }
+
+  Widget _buildResultScreen() {
+    final int percentage = (_score / 10 * 100).toInt();
+    
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.withOpacity(0.2),
+                  spreadRadius: 1,
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFF9A9E),
+                    borderRadius: BorderRadius.all(Radius.circular(12)),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'Quiz Completed!',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 30),
+                Text(
+                  'Your Score: $_score out of 10',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF753027),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '$percentage%',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: _getScoreColor(percentage),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  _getScoreMessage(),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    color: Color(0xFF753027),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F8FF),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF87CEFA)),
+                  ),
+                  child: Column(
+                    children: [
+                      const Text(
+                        'Did you know?',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF753027),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Black keys can be named with either sharp (♯) or flat (♭) notation depending on the musical context. For example, C♯ and D♭ are the same key on the piano!',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF753027),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 30),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _restartQuiz,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Try Again'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF753027),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.home),
+                      label: const Text('Home'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF9A9E),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _getScoreColor(int percentage) {
+    if (percentage >= 80) {
+      return const Color(0xFF28A745); // Green for good score
+    } else if (percentage >= 60) {
+      return const Color(0xFFFFC107); // Yellow/amber for average score
+    } else {
+      return const Color(0xFFDC3545); // Red for poor score
+    }
+  }
+
+  String _getScoreMessage() {
+    if (_score == 10) {
+      return 'Perfect! You have mastered black key identification!';
+    } else if (_score >= 8) {
+      return 'Excellent job! Your ability to identify black keys is very strong!';
+    } else if (_score >= 6) {
+      return 'Good work! You\'re getting comfortable with black key notes.';
+    } else if (_score >= 4) {
+      return 'You\'re making progress with black keys. Keep practicing!';
+    } else {
+      return 'Black keys can be challenging! Regular practice will help you improve.';
+    }
+  }
+}
+
+// Extended Question class for ear training with display notation handling
+class EarQuestion {
+  final String correctNote;       // Internal reference (always using sharp notation)
+  final String displayCorrectNote; // What's shown to the user (may be flat notation)
+  final List<String> options;
+  final int correctOptionIndex;
+
+  EarQuestion({
+    required this.correctNote,
+    required this.displayCorrectNote,
+    required this.options,
+    required this.correctOptionIndex,
+  });
+}

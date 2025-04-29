@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "384366307216",
+    "firebase_url": "https://melodymind-fyp-default-rtdb.firebaseio.com",
+    "project_id": "melodymind-fyp",
+    "storage_bucket": "melodymind-fyp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:384366307216:android:05ecf57a7288b1f8693515",
+        "android_client_info": {
+          "package_name": "com.melodymind"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "384366307216-o1b885q0ogm8s1f7bvvl647s8h7g612g.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDWjBFl_36v_KS0F8pnsu7eSAfKNUw5b1s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "384366307216-o1b885q0ogm8s1f7bvvl647s8h7g612g.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
